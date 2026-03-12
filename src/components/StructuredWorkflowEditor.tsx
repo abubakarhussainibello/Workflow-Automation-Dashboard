@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   Plus,
   GripVertical,
@@ -23,6 +23,8 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { WorkflowToolbox } from './WorkflowToolbox';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
+import { useApp, TriggerType } from '../store/AppContext';
+import { toast } from 'sonner';
 
 // Mock types for transformers and triggers
 type StepType =
@@ -584,27 +586,42 @@ const TransformerStepCard = ({ step, onUpdate, onDelete, onAddNested, onDropOnBr
   );
 };
 
-export const StructuredWorkflowEditor = ({ mode = 'workflow' }: { mode?: 'workflow' | 'module' }) => {
+export const StructuredWorkflowEditor = ({
+  mode = 'workflow',
+  workflowId = null,
+}: {
+  mode?: 'workflow' | 'module';
+  workflowId?: string | null;
+}) => {
+  const { workflows, modules, createWorkflow, updateWorkflow, createModule, updateModule } = useApp();
+
+  // Resolve existing entity from context
+  const existingWorkflow = workflowId
+    ? (mode === 'module'
+        ? modules.find(m => m.id === workflowId)
+        : workflows.find(w => w.id === workflowId))
+    : null;
+
   const [isTesterCollapsed, setIsTesterCollapsed] = useState(true);
   const [isToolboxCollapsed, setIsToolboxCollapsed] = useState(false);
-  const [workflowName, setWorkflowName] = useState("");
-  const [isSetupComplete, setIsSetupComplete] = useState(false);
+  const [workflowName, setWorkflowName] = useState(existingWorkflow?.name ?? "");
+  const [isSetupComplete, setIsSetupComplete] = useState(!!existingWorkflow);
+  // currentId tracks the persisted id (may be assigned after setup for new items)
+  const [currentId, setCurrentId] = useState<string | null>(workflowId);
 
-  const [triggers, setTriggers] = useState<Step[]>([
-    { id: 't1', type: 'Shopify Webhook', label: 'Trigger', config: {} }
-  ]);
-  const [steps, setSteps] = useState<Step[]>([
-    { id: '1', type: 'Value mapper', label: 'Init', config: {} },
-    {
-      id: '2',
-      type: 'Condition',
-      label: 'If Shopify order',
-      config: {},
-      children: [
-        { id: '3', type: 'Set Value', label: 'Set priority', config: {}, branch: 'true' }
-      ]
+  const [triggers, setTriggers] = useState<Step[]>(() => {
+    if (existingWorkflow && 'triggers' in existingWorkflow) {
+      return existingWorkflow.triggers as Step[];
     }
-  ]);
+    return [];
+  });
+
+  const [steps, setSteps] = useState<Step[]>(() => {
+    if (existingWorkflow) {
+      return existingWorkflow.steps as Step[];
+    }
+    return [];
+  });
 
   const removeFromList = (list: Step[], id: string): Step[] => {
     return list
@@ -785,13 +802,65 @@ export const StructuredWorkflowEditor = ({ mode = 'workflow' }: { mode?: 'workfl
     }
   }, [steps, triggers, handleDelete, findStepById]);
 
+  const handleSetupComplete = () => {
+    const name = workflowName.trim();
+    if (!name) return;
+    if (mode === 'module') {
+      const mod = createModule(name);
+      setCurrentId(mod.id);
+    } else {
+      const wf = createWorkflow(name);
+      setCurrentId(wf.id);
+    }
+    setIsSetupComplete(true);
+  };
+
+  const handleSave = () => {
+    if (!currentId) return;
+    const triggerType =
+      triggers.length > 0 ? (triggers[0].type as TriggerType) : 'Webhook';
+    const status =
+      triggers.length > 0 && steps.length > 0 ? 'active' : 'draft';
+
+    if (mode === 'module') {
+      updateModule(currentId, {
+        name: workflowName,
+        steps,
+        stepCount: steps.length,
+      });
+    } else {
+      updateWorkflow(currentId, {
+        name: workflowName,
+        triggers,
+        steps,
+        triggerType,
+        status,
+      });
+    }
+    toast.success(`"${workflowName}" saved`);
+  };
+
   if (!isSetupComplete) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-gray-50 p-4">
         <div className="max-w-md w-full bg-white p-6 sm:p-8 rounded-xl shadow-lg border border-gray-100">
-          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 text-center mb-6">Entity Transformer</h2>
-          <Input placeholder="Name your transformer..." value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} className="mb-4" />
-          <Button className="w-full bg-blue-600" disabled={!workflowName.trim()} onClick={() => setIsSetupComplete(true)}>Start Building</Button>
+          <h2 className="text-xl sm:text-2xl font-bold text-gray-900 text-center mb-6">
+            {mode === 'module' ? 'New Logic Module' : 'New Workflow'}
+          </h2>
+          <Input
+            placeholder={mode === 'module' ? 'Name your module…' : 'Name your workflow…'}
+            value={workflowName}
+            onChange={(e) => setWorkflowName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSetupComplete(); }}
+            className="mb-4"
+          />
+          <Button
+            className="w-full bg-blue-600"
+            disabled={!workflowName.trim()}
+            onClick={handleSetupComplete}
+          >
+            Start Building
+          </Button>
         </div>
       </div>
     );
@@ -820,7 +889,10 @@ export const StructuredWorkflowEditor = ({ mode = 'workflow' }: { mode?: 'workfl
                 <FlaskConical size={16} />
                 <span className="hidden sm:inline">Test</span>
               </Button>
-              <Button size="sm" className="bg-blue-600 text-white">Save</Button>
+              <Button size="sm" className="bg-blue-600 text-white gap-1.5" onClick={handleSave}>
+                <Save size={14} />
+                Save
+              </Button>
            </div>
         </div>
 
